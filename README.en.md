@@ -42,7 +42,7 @@ Open the DMG and drag `Fresh Start.app` into `Applications`.
 
 Fresh Start is intentionally conservative:
 
-- Finder is kept by default.
+- Finder can be included in the close list like a regular app. If you do not want to close it, right-click it and mark it as “Do not quit by default”.
 - System services are not killed blindly.
 - Fresh Start focuses on user-facing apps and explicitly selected targets.
 - If Fresh Start itself is selected, it waits until other selected apps are handled, then exits last.
@@ -65,4 +65,3 @@ If Fresh Start helps you, you can buy me a coffee:
 - UI: SwiftUI + AppKit
 - Build system: Swift Package Manager
 - Distribution: DMG via GitHub Releases
-

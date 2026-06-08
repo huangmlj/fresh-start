@@ -15,7 +15,6 @@ SOFT_TERM_DELAY_SECONDS=2
 CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/reset-mac/config.zsh"
 
 KEEP_APPS=(
-  "Finder"
   "$APP_LABEL"
   "归零"
   "一键回到初始状态"

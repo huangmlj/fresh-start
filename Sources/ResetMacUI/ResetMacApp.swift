@@ -665,7 +665,6 @@ private final class AppModel: ObservableObject {
     private let softTermDelay: UInt64 = 2_000_000_000
 
     private let protectedBundleIdentifiers: Set<String> = [
-        "com.apple.finder",
         "local.reset-mac.one-click"
     ]
 
@@ -1093,6 +1092,10 @@ private final class AppModel: ObservableObject {
     }
 
     private func isSystemApplication(_ application: NSRunningApplication, bundleURL: URL) -> Bool {
+        if application.bundleIdentifier == "com.apple.finder" {
+            return false
+        }
+
         let path = bundleURL.standardizedFileURL.path
         if path.hasPrefix("/System/") || path.hasPrefix("/Library/CoreServices/") {
             return true
@@ -1111,6 +1114,11 @@ private final class AppModel: ObservableObject {
             return
         }
 
+        if item.bundleIdentifier == "com.apple.finder" {
+            runAppleScript("tell application id \"com.apple.finder\" to quit")
+            return
+        }
+
         _ = application.terminate()
 
         if let bundleIdentifier = item.bundleIdentifier,
@@ -1120,6 +1128,13 @@ private final class AppModel: ObservableObject {
                 Darwin.kill(application.processIdentifier, SIGTERM)
             }
         }
+    }
+
+    private func runAppleScript(_ script: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        try? process.run()
     }
 
     private func isCurrentApplication(_ item: AppItem) -> Bool {
