@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+DerivedData/
+__pycache__/
+assets/AppIcon.iconset/
+assets/FreshStartSource.png
+assets/icon-options/
+.DS_Store
+dist/

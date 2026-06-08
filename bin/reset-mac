@@ -1,0 +1,469 @@
+#!/bin/zsh
+set -uo pipefail
+
+VERSION="0.1.0"
+APP_LABEL="Fresh Start"
+
+DRY_RUN=0
+FORCE=0
+SLEEP_AFTER=0
+KILL_EXTRA=0
+LIST_ONLY=0
+USE_CONFIG=1
+TIMEOUT_SECONDS=12
+SOFT_TERM_DELAY_SECONDS=2
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/reset-mac/config.zsh"
+
+KEEP_APPS=(
+  "Finder"
+  "$APP_LABEL"
+  "归零"
+  "一键回到初始状态"
+  "One Click Reset"
+  "Reset Mac"
+)
+
+KEEP_BUNDLE_IDS=(
+  "local.reset-mac.one-click"
+)
+
+SOFT_TERM_BUNDLE_IDS=(
+  "com.tencent.xinWeChat"
+)
+
+MENU_BAR_APPS=()
+EXTRA_PROCESSES=()
+
+usage() {
+  cat <<'USAGE'
+Usage: reset-mac [options]
+
+Close user apps before sleep, with an optional force pass.
+
+Options:
+  -n, --dry-run              Show what would be closed, but do nothing
+  -f, --force                Kill apps that remain after the timeout
+      --sleep                Put the Mac to sleep after cleanup
+      --timeout <seconds>    Seconds to wait before force killing apps
+      --soft-term-delay <s>  Seconds to wait before TERM fallback apps
+      --keep <app>           Keep an app for this run
+      --keep-bundle-id <id>  Keep an app by bundle identifier for this run
+      --soft-term-bundle-id <id>
+                              TERM this app if it ignores normal quit
+      --menu-bar-app <app>   Also quit this menu bar/background app
+      --kill-extra           Kill configured EXTRA_PROCESSES
+      --extra-process <name> Add a process name to EXTRA_PROCESSES
+      --config <path>        Load a custom config file
+      --no-config            Do not load config
+      --list                 List discovered apps and configured targets
+  -h, --help                 Show this help
+      --version              Show version
+USAGE
+}
+
+log() {
+  print -r -- "$@"
+}
+
+die() {
+  print -ru2 -- "reset-mac: $@"
+  exit 1
+}
+
+contains() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+first_pass_args() {
+  local args=("$@")
+  local i=1
+  while (( i <= ${#args[@]} )); do
+    case "${args[$i]}" in
+      --config)
+        (( i++ ))
+        (( i <= ${#args[@]} )) || die "--config needs a path"
+        CONFIG_FILE="${args[$i]}"
+        ;;
+      --no-config)
+        USE_CONFIG=0
+        ;;
+    esac
+    (( i++ ))
+  done
+}
+
+parse_args() {
+  while (( $# > 0 )); do
+    case "$1" in
+      -n|--dry-run)
+        DRY_RUN=1
+        ;;
+      -f|--force)
+        FORCE=1
+        ;;
+      --sleep)
+        SLEEP_AFTER=1
+        ;;
+      --timeout)
+        shift
+        [[ $# -gt 0 ]] || die "--timeout needs seconds"
+        [[ "$1" == <-> ]] || die "--timeout must be an integer"
+        TIMEOUT_SECONDS="$1"
+        ;;
+      --soft-term-delay)
+        shift
+        [[ $# -gt 0 ]] || die "--soft-term-delay needs seconds"
+        [[ "$1" == <-> ]] || die "--soft-term-delay must be an integer"
+        SOFT_TERM_DELAY_SECONDS="$1"
+        ;;
+      --keep)
+        shift
+        [[ $# -gt 0 ]] || die "--keep needs an app name"
+        KEEP_APPS+=("$1")
+        ;;
+      --keep-bundle-id)
+        shift
+        [[ $# -gt 0 ]] || die "--keep-bundle-id needs a bundle identifier"
+        KEEP_BUNDLE_IDS+=("$1")
+        ;;
+      --soft-term-bundle-id)
+        shift
+        [[ $# -gt 0 ]] || die "--soft-term-bundle-id needs a bundle identifier"
+        SOFT_TERM_BUNDLE_IDS+=("$1")
+        ;;
+      --menu-bar-app)
+        shift
+        [[ $# -gt 0 ]] || die "--menu-bar-app needs an app name"
+        MENU_BAR_APPS+=("$1")
+        ;;
+      --kill-extra)
+        KILL_EXTRA=1
+        ;;
+      --extra-process)
+        shift
+        [[ $# -gt 0 ]] || die "--extra-process needs a process name"
+        EXTRA_PROCESSES+=("$1")
+        ;;
+      --config)
+        shift
+        [[ $# -gt 0 ]] || die "--config needs a path"
+        ;;
+      --no-config)
+        ;;
+      --list)
+        LIST_ONLY=1
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --version)
+        print -r -- "$VERSION"
+        exit 0
+        ;;
+      *)
+        die "unknown option: $1"
+        ;;
+    esac
+    shift
+  done
+}
+
+load_config() {
+  if (( USE_CONFIG == 1 )) && [[ -f "$CONFIG_FILE" ]]; then
+    # User-owned zsh config. Keep it small and explicit.
+    source "$CONFIG_FILE"
+  fi
+}
+
+visible_app_rows() {
+  /usr/bin/osascript <<'OSA'
+set outputRows to {}
+tell application "System Events"
+  repeat with proc in (application processes whose background only is false)
+    try
+      set appName to name of proc as text
+      set appID to bundle identifier of proc as text
+      set appPID to unix id of proc as text
+      copy (appName & tab & appID & tab & appPID) to end of outputRows
+    end try
+  end repeat
+end tell
+set AppleScript's text item delimiters to linefeed
+return outputRows as text
+OSA
+}
+
+named_app_rows() {
+  local target_name="$1"
+  /usr/bin/osascript - "$target_name" <<'OSA'
+on run argv
+set targetName to item 1 of argv
+set outputRows to {}
+tell application "System Events"
+  repeat with proc in (application processes whose name is targetName)
+    try
+      set appName to name of proc as text
+      set appID to bundle identifier of proc as text
+      set appPID to unix id of proc as text
+      copy (appName & tab & appID & tab & appPID) to end of outputRows
+    end try
+  end repeat
+end tell
+set AppleScript's text item delimiters to linefeed
+return outputRows as text
+end run
+OSA
+}
+
+quit_bundle() {
+  local bundle_id="$1"
+  /usr/bin/osascript - "$bundle_id" <<'OSA' >/dev/null 2>&1
+on run argv
+  set targetBundle to item 1 of argv
+  try
+    ignoring application responses
+      tell application id targetBundle to quit
+    end ignoring
+  end try
+end run
+OSA
+}
+
+bundle_pids() {
+  local bundle_id="$1"
+  /usr/bin/osascript - "$bundle_id" <<'OSA'
+on run argv
+  set targetBundle to item 1 of argv
+  set outputRows to {}
+  tell application "System Events"
+    repeat with proc in (application processes whose bundle identifier is targetBundle)
+      try
+        copy ((unix id of proc) as text) to end of outputRows
+      end try
+    end repeat
+  end tell
+  set AppleScript's text item delimiters to linefeed
+  return outputRows as text
+end run
+OSA
+}
+
+is_pid_running() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 1
+  /bin/kill -0 "$pid" >/dev/null 2>&1
+}
+
+force_kill_pid() {
+  local pid="$1"
+  local name="$2"
+  if is_pid_running "$pid"; then
+    log "Force killing $name (pid $pid)"
+    /bin/kill "$pid" >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  if is_pid_running "$pid"; then
+    /bin/kill -9 "$pid" >/dev/null 2>&1 || true
+  fi
+}
+
+term_pid() {
+  local pid="$1"
+  local name="$2"
+  if is_pid_running "$pid"; then
+    log "TERM fallback for $name (pid $pid)"
+    /bin/kill "$pid" >/dev/null 2>&1 || true
+  fi
+}
+
+collect_targets() {
+  local include_background="${1:-0}"
+  local row app_name bundle_id pid
+  local source_rows
+
+  if (( include_background == 1 )); then
+    (( ${#MENU_BAR_APPS[@]} > 0 )) || return 0
+    local menu_app
+    for menu_app in "${MENU_BAR_APPS[@]}"; do
+      local menu_rows
+      menu_rows="$(named_app_rows "$menu_app")" || die "unable to query app '$menu_app'. Allow automation access to System Events in System Settings."
+      if [[ -n "$menu_rows" ]]; then
+        source_rows+="$menu_rows"$'\n'
+      fi
+    done
+  else
+    source_rows="$(visible_app_rows)" || die "unable to query visible apps. Allow automation access to System Events in System Settings."
+  fi
+
+  while IFS=$'\t' read -r app_name bundle_id pid; do
+    [[ -n "${app_name:-}" && -n "${bundle_id:-}" && -n "${pid:-}" ]] || continue
+    contains "$bundle_id" "${KEEP_BUNDLE_IDS[@]}" && continue
+
+    if (( include_background == 1 )); then
+      contains "$app_name" "${MENU_BAR_APPS[@]}" || continue
+    else
+      contains "$app_name" "${KEEP_APPS[@]}" && continue
+    fi
+
+    print -r -- "$app_name"$'\t'"$bundle_id"$'\t'"$pid"
+  done <<< "$source_rows"
+}
+
+print_list() {
+  log "Visible apps:"
+  visible_app_rows | while IFS=$'\t' read -r app_name bundle_id pid; do
+    [[ -n "${app_name:-}" ]] || continue
+    if contains "$app_name" "${KEEP_APPS[@]}" || contains "$bundle_id" "${KEEP_BUNDLE_IDS[@]}"; then
+      log "  keep   $app_name ($pid)"
+    else
+      log "  close  $app_name ($pid)"
+    fi
+  done
+
+  if (( ${#MENU_BAR_APPS[@]} > 0 )); then
+    log ""
+    log "Configured menu bar apps:"
+    local app
+    for app in "${MENU_BAR_APPS[@]}"; do
+      log "  close  $app"
+    done
+  fi
+
+  if (( ${#EXTRA_PROCESSES[@]} > 0 )); then
+    log ""
+    log "Configured extra processes:"
+    local proc
+    for proc in "${EXTRA_PROCESSES[@]}"; do
+      log "  kill   $proc"
+    done
+  fi
+}
+
+quit_targets() {
+  local targets="$1"
+  local row app_name bundle_id pid
+  while IFS=$'\t' read -r app_name bundle_id pid; do
+    [[ -n "${app_name:-}" ]] || continue
+    log "Quitting $app_name"
+    quit_bundle "$bundle_id"
+  done <<< "$targets"
+}
+
+soft_term_remaining_targets() {
+  local targets="$1"
+  local row app_name bundle_id original_pid pid pids did_sleep=0
+
+  (( ${#SOFT_TERM_BUNDLE_IDS[@]} > 0 )) || return 0
+
+  while IFS=$'\t' read -r app_name bundle_id original_pid; do
+    [[ -n "${app_name:-}" ]] || continue
+    contains "$bundle_id" "${SOFT_TERM_BUNDLE_IDS[@]}" || continue
+
+    if (( DRY_RUN == 1 )); then
+      log "Would TERM fallback if still running: $app_name"
+      continue
+    fi
+
+    if (( did_sleep == 0 )); then
+      sleep "$SOFT_TERM_DELAY_SECONDS"
+      did_sleep=1
+    fi
+
+    pids="$(bundle_pids "$bundle_id")"
+    while IFS= read -r pid; do
+      [[ -n "${pid:-}" ]] || continue
+      term_pid "$pid" "$app_name"
+    done <<< "$pids"
+  done <<< "$targets"
+}
+
+force_remaining_targets() {
+  local targets="$1"
+  local row app_name bundle_id original_pid pid pids
+
+  log "Waiting ${TIMEOUT_SECONDS}s before force pass..."
+  sleep "$TIMEOUT_SECONDS"
+
+  while IFS=$'\t' read -r app_name bundle_id original_pid; do
+    [[ -n "${app_name:-}" ]] || continue
+    pids="$(bundle_pids "$bundle_id")"
+    while IFS= read -r pid; do
+      [[ -n "${pid:-}" ]] || continue
+      force_kill_pid "$pid" "$app_name"
+    done <<< "$pids"
+  done <<< "$targets"
+}
+
+kill_extra_processes() {
+  (( KILL_EXTRA == 1 )) || return 0
+  (( ${#EXTRA_PROCESSES[@]} > 0 )) || return 0
+
+  local proc
+  for proc in "${EXTRA_PROCESSES[@]}"; do
+    if (( DRY_RUN == 1 )); then
+      log "Would kill extra process: $proc"
+    else
+      log "Killing extra process: $proc"
+      /usr/bin/pkill -x "$proc" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+sleep_mac() {
+  (( SLEEP_AFTER == 1 )) || return 0
+
+  if (( DRY_RUN == 1 )); then
+    log "Would put Mac to sleep"
+  else
+    log "Putting Mac to sleep"
+    /usr/bin/pmset sleepnow
+  fi
+}
+
+main() {
+  first_pass_args "$@"
+  load_config
+  parse_args "$@"
+
+  if (( LIST_ONLY == 1 )); then
+    print_list
+    exit 0
+  fi
+
+  local app_targets menu_targets all_targets
+  app_targets="$(collect_targets 0)"
+  menu_targets="$(collect_targets 1)"
+  all_targets="$app_targets"
+  if [[ -n "$menu_targets" ]]; then
+    all_targets="${all_targets}"$'\n'"${menu_targets}"
+  fi
+
+  if [[ -z "${all_targets//$'\n'/}" ]]; then
+    log "Nothing to close."
+  elif (( DRY_RUN == 1 )); then
+    log "Apps that would be closed:"
+    while IFS=$'\t' read -r app_name bundle_id pid; do
+      [[ -n "${app_name:-}" ]] || continue
+      log "  $app_name ($pid)"
+    done <<< "$all_targets"
+    soft_term_remaining_targets "$all_targets"
+  else
+    quit_targets "$all_targets"
+    soft_term_remaining_targets "$all_targets"
+    if (( FORCE == 1 )); then
+      force_remaining_targets "$all_targets"
+    fi
+  fi
+
+  kill_extra_processes
+  sleep_mac
+}
+
+main "$@"
