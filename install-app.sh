@@ -12,6 +12,7 @@ EXECUTABLE_NAME="ResetMacUI"
 ICON_PNG="$ROOT_DIR/assets/AppIcon.png"
 ICON_PATH="$ROOT_DIR/assets/AppIcon.icns"
 ICONSET_PATH="$ROOT_DIR/assets/AppIcon.iconset"
+DONATE_QR_PATH="$ROOT_DIR/assets/DonateQRCode.png"
 
 cd "$ROOT_DIR"
 /usr/bin/swift build -c release --product "$EXECUTABLE_NAME"
@@ -49,6 +50,10 @@ if [[ -f "$ICON_PATH" ]]; then
   cp "$ICON_PATH" "$APP_PATH/Contents/Resources/AppIcon.icns"
 fi
 
+if [[ -f "$DONATE_QR_PATH" ]]; then
+  cp "$DONATE_QR_PATH" "$APP_PATH/Contents/Resources/DonateQRCode.png"
+fi
+
 cat > "$APP_PATH/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -69,9 +74,9 @@ cat > "$APP_PATH/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.4.0</string>
+  <string>0.4.1</string>
   <key>CFBundleVersion</key>
-  <string>4</string>
+  <string>5</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>

@@ -914,15 +914,45 @@ private final class AppModel: ObservableObject {
         alert.accessoryView = stack
 
         alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "请我喝杯咖啡")
         alert.addButton(withTitle: "取消")
 
-        guard alert.runModal() == .alertFirstButtonReturn else {
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            showDonationQRCode()
+            return
+        }
+
+        guard response == .alertFirstButtonReturn else {
             return
         }
 
         showSystemApplications = popUp.indexOfSelectedItem == 0
         userDefaults.set(showSystemApplications, forKey: showSystemApplicationsKey)
         refresh()
+    }
+
+    private func showDonationQRCode() {
+        guard let url = Bundle.main.url(forResource: "DonateQRCode", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else {
+            showError(title: "无法打开二维码", message: "没有找到 DonateQRCode.png。")
+            return
+        }
+
+        let imageView = NSImageView(frame: NSRect(x: 0, y: 0, width: 280, height: 280))
+        imageView.image = image
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+
+        let alert = NSAlert()
+        alert.messageText = "请我喝杯咖啡"
+        alert.informativeText = "感谢你支持 Fresh Start。"
+        alert.accessoryView = imageView
+        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: "打开图片")
+
+        if alert.runModal() == .alertSecondButtonReturn {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     func closeApps(sleepAfter: Bool) async {
